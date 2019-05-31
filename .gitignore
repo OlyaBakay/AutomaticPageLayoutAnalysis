@@ -1,6 +1,4 @@
 .idea/
-data/khronika/
-data/zapysky/
-data/out_img/
-data/1141-2194-1-PB.pdf
+data/
 __pycache__/
+useless_staff/
