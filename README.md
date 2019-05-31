@@ -1,3 +1,5 @@
-#### In this work, we compare the results of different approaches for automatic document layout analysis using Convolutional Neural Networks. 
+#### In this work, we compare the results of different approaches for automatic document layout analysis using Convolutional Neural Networks.
 Although there is great progress in the Image Processing domain, there are still open problems, such as accurate detection of regions of content and classification of them into semantically similar classes. The primary purpose of work is to simplify the further processing of Ukrainian historic archives. For it, two various techniques were used. The first one is modification and re-implementation of already existing approach for document layout analysis. Another method is suggested by us and re-uses the pre-trained model on a bigger dataset. During this work, we also collected a new dataset of Ukrainian scientific publications. We evaluate these approaches on an independent test set and compare the precisions of each model.
- 
+
+#### All used data can be found here: http://bit.ly/2WuFixF. 
+The main folder consists of three subfolders: impact - is the part of IMPACT dataset; labelImg - dataset collected from the Zapysky NTSh and was labelled in labelImg; superviserly - dataset collected from the Zbirnyk NTSh and was labelled in Superviserly, accordingly.
