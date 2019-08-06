@@ -8,6 +8,7 @@ import torch.nn as nn
 from tensorboardX import SummaryWriter
 from tqdm import tqdm
 import numpy as np
+import cv2
 
 from .datasets import MaskDataset
 from .collector import Collector
@@ -73,6 +74,7 @@ class Trainer(object):
             self.optim.step()
             it.set_postfix(loss=loss.item())
             self.global_step += 1
+        self._write_images("train", img, out.sigmoid(), epoch_number)
         return np.mean(collection["loss"])
 
     def val_epoch(self, epoch_number):
@@ -90,8 +92,20 @@ class Trainer(object):
                 loss = self.criterion(out, mask)
             collection.add("loss", loss.item())
             it.set_postfix(loss=loss.item())
-
+        self._write_images("val", img, out.sigmoid(), epoch_number)
         return np.mean(collection["loss"])
+
+    def _write_images(self, general_tag, imgs, masks, epoch):
+        # B, C, W, H
+        imgs = imgs.detach().cpu().squeeze(1).numpy() * 255
+        # B, C, W, H
+        masks = masks.detach().cpu().squeeze(1).numpy() > 0.5
+        for image_index in range(len(imgs)):
+            img = cv2.cvtColor(imgs[image_index], cv2.COLOR_GRAY2RGB).astype(np.float)
+            mask = masks[image_index]
+            img[mask] = img[mask] / 2 + [0.0, 127.5, 0.0]
+            img = torch.Tensor(img.transpose(2, 0, 1) / 255.0)
+            self.writer.add_image("{}/image-{}".format(general_tag, image_index + 1), img, epoch)
 
     def train(self):
         self.global_step = 0
