@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 import copy
 import tensorflow as tf
-import tfrecords
+from . import tfrecords
 import os
 
 from utils.region import Region

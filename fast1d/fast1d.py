@@ -2,8 +2,9 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-from datasets import TrainProjectionDataset, TestProjectionDataset
-from useless_staff.model import Fast1D
+from .datasets import TrainProjectionDataset, TestProjectionDataset
+from .model import Fast1D
+
 
 def train(epochs=100):
     net = Fast1D(3)
@@ -27,6 +28,7 @@ def train(epochs=100):
         print('{} epoch loss: {}'.format(epoch + 1, running_loss / len(trainloader)))
     print('Finished Training')
     return net
+
 
 def eval(net, path="../out/projections/1108-2162-1-PB"):
     testset = TestProjectionDataset(path)

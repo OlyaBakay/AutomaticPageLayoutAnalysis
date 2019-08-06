@@ -14,6 +14,7 @@ from utils.region import Region, get_spaced_colors, generate_label_map
 ANNOTATION_FOLDER = "ann"
 IMAGE_FOLDER = "img"
 
+
 def generate_meta_json(outpath, level=1):
     info = {"classes": [], "tags_images": [], "tags_objects": []}
 
@@ -39,6 +40,7 @@ def generate_meta_json(outpath, level=1):
     with open(os.path.join(outpath + "meta.json"), "w") as f:
         json.dump(info, f)
 
+
 def prepare_dataset(inpath):
     files = [os.path.join(inpath, file) for file in os.listdir(inpath)]
     os.makedirs(os.path.join(inpath, ANNOTATION_FOLDER))
@@ -52,6 +54,7 @@ def prepare_dataset(inpath):
             json.dump(info, f)
         shutil.move(file, os.path.join(inpath, IMAGE_FOLDER, "{}.jpg".format(filename)))
 
+
 def find_regions(info):
     objects = info['objects']
     regions = []
@@ -63,17 +66,21 @@ def find_regions(info):
         regions.append(Region(category, subcategory, np.array(countour, int)))
     return regions
 
+
 def parse_json(file):
-    path = os.path.normpath(file)
-    path_parts = path.split(os.sep)
-    image_filename = os.path.splitext(os.path.basename(path_parts[-1]))[0]
-    image_path = os.path.join(*path_parts[:-2], IMAGE_FOLDER, image_filename)
+    _dirname = os.path.dirname(os.path.dirname(file))
+    basename = os.path.basename(file)
+    image_filename = os.path.splitext(basename)[0]
+    image_path = os.path.join(_dirname, IMAGE_FOLDER, image_filename)
+
     image = cv2.imread(image_path)
     image_object = Image(image, filename=image_filename)
-    with open(path) as f:
+
+    with open(file) as f:
         info = json.load(f)
         image_object.regions = find_regions(info)
     return image_object
+
 
 def to_tfrecords(in_path, out_path, level=Region.LEVEL_CATEGORY, filename="data.record"):
     os.makedirs(out_path, exist_ok=True)
@@ -87,11 +94,13 @@ def to_tfrecords(in_path, out_path, level=Region.LEVEL_CATEGORY, filename="data.
         writer.write(image_object.to_tfrecord(level=level))
     writer.close()
 
+
 def extract_projections(in_path, out_path, categories=("text", "maths", "separator")):
+    # TODO: check it out
     for category in categories:
         os.makedirs(os.path.join(out_path, category), exist_ok=True)
     files = os.listdir(os.path.join(in_path, ANNOTATION_FOLDER))
-    counters = {category:0 for category in categories}
+    counters = {category: 0 for category in categories}
     for file in tqdm(files):
         file = os.path.join(in_path, ANNOTATION_FOLDER, file)
         image_object = parse_json(file)
@@ -101,8 +110,8 @@ def extract_projections(in_path, out_path, categories=("text", "maths", "separat
             if region.category in categories:
                 mn = np.min(region.contour, axis=0)
                 mx = np.max(region.contour, axis=0)
-                block = grey[mn[1]:mx[1],mn[0]:mx[0]] / 255
-                block = cv2.resize(block, (100,100))
+                block = grey[mn[1]:mx[1], mn[0]:mx[0]] / 255
+                block = cv2.resize(block, (100, 100))
                 x = block.sum(axis=0) / 100
                 y = block.sum(axis=1) / 100
                 info = {"x": np.array(x, np.float32), "y": np.array(y, np.float32)}
@@ -116,6 +125,9 @@ if __name__ == "__main__":
     # extract_projections("../data/supervisely/zbirnyk/tom_1/1120-2163-1-PB", "../out/projections/1120-2163-1-PB")
     # extract_projections("../data/supervisely/zbirnyk/tom_1/1108-2162-1-PB", "../out/projections/1108-2162-1-PB")
 
-            #cv2.waitKey(0)
-    to_tfrecords("../data/supervisely/zbirnyk/tom_1/1120-2163-1-PB", "../out/zbirnyk/subcategory", level=Region.LEVEL_SUBCATEGORY, filename="train.record")
-    to_tfrecords("../data/supervisely/zbirnyk/tom_1/1108-2162-1-PB", "../out/zbirnyk/subcategory", level=Region.LEVEL_SUBCATEGORY, filename="test.record")
+    # cv2.waitKey(0)
+    # to_tfrecords("../data/supervisely/zbirnyk/tom_1/1120-2163-1-PB", "../out/zbirnyk/subcategory",
+    #              level=Region.LEVEL_SUBCATEGORY, filename="train.record")
+    # to_tfrecords("../data/supervisely/zbirnyk/tom_1/1108-2162-1-PB", "../out/zbirnyk/subcategory",
+    #              level=Region.LEVEL_SUBCATEGORY, filename="test.record")
+    pass

@@ -3,6 +3,7 @@ import pickle
 import numpy as np
 from torch.utils.data import Dataset
 
+
 class TrainProjectionDataset(Dataset):
     def __init__(self, path, transform=None):
         self.categories = os.listdir(path)
@@ -25,6 +26,7 @@ class TrainProjectionDataset(Dataset):
             info = pickle.load(f)
 
         return np.expand_dims(info['x'], axis=0), np.expand_dims(info['y'], axis=0), category_id
+
 
 class TestProjectionDataset(Dataset):
     def __init__(self, path, transform=None):
