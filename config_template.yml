@@ -1,0 +1,19 @@
+experiment: default
+data:
+  seed: 42
+  train_fraction: 0.8
+  list:
+    - data/supervisely/zbirnyk/tom_1/1108-2162-1-PB
+    - data/supervisely/zbirnyk/tom_1/1120-2163-1-PB
+    - data/supervisely/zbirnyk/tom_1/1131-2195-1-PB
+train:
+  epochs: 50
+  lr: 0.001
+  batch: 5
+val:
+  batch: 5
+model:
+  name: torch-unet
+  params:
+    in_channels: 1
+    pretrained: False

@@ -2,3 +2,5 @@
 data/
 __pycache__/
 useless_staff/
+.ipynb_checkpoints/
+*.h5
