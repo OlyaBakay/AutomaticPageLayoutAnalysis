@@ -60,7 +60,7 @@ class Trainer(object):
         self.model.train()
 
         collection = Collector()
-        for img, mask in it:
+        for batch_index, (img, mask) in enumerate(it):
             img, mask = img.to(self.device), mask.to(self.device)
 
             self.optim.zero_grad()
@@ -74,7 +74,9 @@ class Trainer(object):
             self.optim.step()
             it.set_postfix(loss=loss.item())
             self.global_step += 1
-        self._write_images("train", img, out.sigmoid(), epoch_number)
+            if batch_index == 0:
+                self._write_images("train", img, out.sigmoid(), epoch_number)
+
         return np.mean(collection["loss"])
 
     def val_epoch(self, epoch_number):
@@ -84,7 +86,7 @@ class Trainer(object):
         self.model.eval()
 
         collection = Collector()
-        for img, mask in it:
+        for batch_index, (img, mask) in enumerate(it):
             img, mask = img.to(self.device), mask.to(self.device)
 
             with torch.no_grad():
@@ -92,7 +94,10 @@ class Trainer(object):
                 loss = self.criterion(out, mask)
             collection.add("loss", loss.item())
             it.set_postfix(loss=loss.item())
-        self._write_images("val", img, out.sigmoid(), epoch_number)
+
+            if batch_index == 0:
+                self._write_images("val", img, out.sigmoid(), epoch_number)
+
         return np.mean(collection["loss"])
 
     def _write_images(self, general_tag, imgs, masks, epoch):
