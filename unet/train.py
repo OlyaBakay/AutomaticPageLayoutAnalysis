@@ -10,8 +10,32 @@ from tqdm import tqdm
 import numpy as np
 import cv2
 
+from albumentations import (
+    PadIfNeeded,
+    HorizontalFlip,
+    VerticalFlip,
+    CenterCrop,
+    Crop,
+    Compose,
+    Transpose,
+    RandomRotate90,
+    ElasticTransform,
+    RandomCrop,
+    GridDistortion,
+    OpticalDistortion,
+    RandomSizedCrop,
+    OneOf,
+    CLAHE,
+    RandomBrightnessContrast,
+    RandomGamma,
+    RandomScale,
+    Rotate,
+    Resize
+)
+
 from .datasets import MaskDataset
 from .collector import Collector
+from .metrics import iou_pytorch
 
 
 class Trainer(object):
@@ -20,10 +44,36 @@ class Trainer(object):
         self.device = device
         self.config = config
         self.train_data, self.val_data = self.load_datasets()
+        print("Train", len(self.train_data))
+        print("Val", len(self.val_data))
         self.criterion = self.load_criterion()
         self.model = self.load_model()
         self.optim = self.load_optim()
         self.writer = self.init_board()
+        self.metrics = self.init_metrics()
+
+    def init_metrics(self):
+        metrics = dict()
+        metrics["iou"] = iou_pytorch
+        return metrics
+
+    def init_augmentations(self):
+        # TODO: change this
+        width, height = 724, 1024
+        wanted_size = 256
+        aug = Compose([
+            Resize(height=height, width=width),
+            RandomScale(scale_limit=0.5, always_apply=True),
+            RandomCrop(height=wanted_size, width=wanted_size),
+            PadIfNeeded(min_height=wanted_size, min_width=wanted_size, p=0.5),
+            Rotate(limit=10, p=0.5),
+            VerticalFlip(p=0.5),
+            GridDistortion(p=0.5),
+            CLAHE(p=0.8),
+            RandomBrightnessContrast(p=0.8),
+            RandomGamma(p=0.8)
+        ])
+        return aug
 
     def init_board(self):
         return SummaryWriter(os.path.join(self.exp_path, "runs"))
@@ -39,16 +89,21 @@ class Trainer(object):
 
     def load_datasets(self):
         config = self.config["data"]
+        aug = self.init_augmentations()
 
-        datasets = data_utils.ConcatDataset(
-            [MaskDataset(data_path) for data_path in config["list"]]
-        )
-        indices = list(range(len(datasets)))
+        files = []
+        for in_path in config["list"]:
+            in_path = os.path.join(in_path, MaskDataset.ANNOTATION_FOLDER)
+            files += list(os.path.join(in_path, fn) for fn in os.listdir(in_path))
+
         random.seed(config["seed"])
-        random.shuffle(indices)
-        train_indices = indices[:int(len(indices) * config["train_fraction"])]
-        val_indices = indices[len(train_indices):]
-        return data_utils.Subset(datasets, train_indices), data_utils.Subset(datasets, val_indices)
+        random.shuffle(files)
+        train_files = files[:int(len(files) * config["train_fraction"])]
+        val_files = files[len(train_files):]
+
+        train_dset = MaskDataset(train_files, augmentations=aug)
+        val_dset = MaskDataset(val_files)
+        return train_dset, val_dset
 
     def load_criterion(self):
         return nn.BCEWithLogitsLoss()
@@ -67,17 +122,29 @@ class Trainer(object):
             out = self.model(img)
             loss = self.criterion(out, mask)
 
-            collection.add("loss", loss.item())
-            self.writer.add_scalars("batch_bce_loss", dict(train=loss.item()), self.global_step)
-
             loss.backward()
             self.optim.step()
-            it.set_postfix(loss=loss.item())
+
+            collection.add("loss", loss.item())
+            self.writer.add_scalars("batch", dict(loss=loss.item()), self.global_step)
+            batch_metrics = dict()
+            for metric_name, metric_f in self.metrics.items():
+                metric_slug = "metric_{}".format(metric_name)
+                with torch.no_grad():
+                    metric_value = metric_f(out, mask, reduce=True).item()
+                collection.add(metric_slug, metric_value)
+                batch_metrics[metric_slug] = metric_value
+            self.writer.add_scalars("batch", batch_metrics, self.global_step)
+
+            it.set_postfix(loss=loss.item(), **batch_metrics)
             self.global_step += 1
+
             if batch_index == 0:
                 self._write_images("train", img, out.sigmoid(), epoch_number)
 
-        return np.mean(collection["loss"])
+        epoch_reduced_metrics = {metric_name: np.mean(collection[metric_name]) for metric_name in collection.keys()}
+        epoch_loss = epoch_reduced_metrics.pop("loss")
+        return epoch_loss, epoch_reduced_metrics
 
     def val_epoch(self, epoch_number):
         config = self.config["val"]
@@ -92,13 +159,24 @@ class Trainer(object):
             with torch.no_grad():
                 out = self.model(img)
                 loss = self.criterion(out, mask)
+
             collection.add("loss", loss.item())
-            it.set_postfix(loss=loss.item())
+            batch_metrics = dict()
+            for metric_name, metric_f in self.metrics.items():
+                metric_slug = "metric_{}".format(metric_name)
+                with torch.no_grad():
+                    metric_value = metric_f(out, mask, reduce=True).item()
+                collection.add(metric_slug, metric_value)
+                batch_metrics[metric_slug] = metric_value
+
+            it.set_postfix(loss=loss.item(), **batch_metrics)
 
             if batch_index == 0:
                 self._write_images("val", img, out.sigmoid(), epoch_number)
 
-        return np.mean(collection["loss"])
+        epoch_reduced_metrics = {metric_name: np.mean(collection[metric_name]) for metric_name in collection.keys()}
+        epoch_loss = epoch_reduced_metrics.pop("loss")
+        return epoch_loss, epoch_reduced_metrics
 
     def _write_images(self, general_tag, imgs, masks, epoch):
         # B, C, W, H
@@ -117,11 +195,15 @@ class Trainer(object):
         best_value = None
         for i_epoch in range(self.config["train"]["epochs"]):
             self.epoch = i_epoch
-            train_loss = self.train_epoch(self.epoch)
+            train_loss, train_metrics = self.train_epoch(self.epoch)
             print("Train loss epoch[{}] = {}".format(i_epoch, train_loss))
-            val_loss = self.val_epoch(self.epoch)
+            val_loss, val_metrics = self.val_epoch(self.epoch)
             print("Val loss epoch[{}] = {}".format(i_epoch, val_loss))
             self.writer.add_scalars("epoch_bce_loss", dict(train=train_loss, val=val_loss), i_epoch)
+            for metric_name in train_metrics.keys():
+                self.writer.add_scalars("epoch_{}".format(metric_name),
+                                        dict(train=train_metrics[metric_name],
+                                             val=val_metrics[metric_name]), i_epoch)
 
             torch.save(self.model.state_dict(), os.path.join(self.exp_path, "current_model.h5"))
             if best_value is None or val_loss < best_value:
