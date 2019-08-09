@@ -5,6 +5,7 @@ import shutil
 import torch
 import torch.utils.data as data_utils
 import torch.nn as nn
+import torch.nn.functional as F
 from tensorboardX import SummaryWriter
 from tqdm import tqdm
 import numpy as np
@@ -36,6 +37,7 @@ from albumentations import (
 from .datasets import MaskDataset
 from .collector import Collector
 from .metrics import iou_pytorch
+from .projections import process_batch_torch_wrap
 
 
 class Trainer(object):
@@ -47,7 +49,7 @@ class Trainer(object):
         print("Train", len(self.train_data))
         print("Val", len(self.val_data))
         self.criterion = self.load_criterion()
-        self.model = self.load_model()
+        self.model, self.proj_model = self.load_model()
         self.optim = self.load_optim()
         self.writer = self.init_board()
         self.metrics = self.init_metrics()
@@ -79,13 +81,16 @@ class Trainer(object):
         return SummaryWriter(os.path.join(self.exp_path, "runs"))
 
     def load_optim(self):
-        return torch.optim.Adam(self.model.parameters(), lr=self.config["train"]["lr"])
+        parameters = list(self.model.parameters()) + list(self.proj_model.parameters())
+        return torch.optim.Adam(parameters,
+                                lr=self.config["train"]["lr"])
 
     def load_model(self):
         config = self.config["model"]
         # Different models
-        from .model import UNet
-        return UNet(**config["params"]).to(self.device)
+        from .model import UNet, Fast1D
+        # TODO: fix `5` magic constant
+        return UNet(**config["params"]).to(self.device), Fast1D(5).to(self.device)
 
     def load_datasets(self):
         config = self.config["data"]
@@ -115,18 +120,35 @@ class Trainer(object):
         self.model.train()
 
         collection = Collector()
-        for batch_index, (img, mask, _) in enumerate(it):
+        for batch_index, (img, mask, class_mask) in enumerate(it):
             img, mask = img.to(self.device), mask.to(self.device)
 
             self.optim.zero_grad()
             out = self.model(img)
             loss = self.criterion(out, mask)
 
-            loss.backward()
+            # loss.backward()
+
+            out_mask = out.detach().sigmoid() > 0.5
+            proj, proj_class = process_batch_torch_wrap(img.detach().cpu(), out_mask.cpu(), class_mask)
+            if proj.shape[0] == 0:
+                total_loss = loss
+            else:
+                proj, proj_class = proj.to(self.device), proj_class.to(self.device)
+                proj_out = self.proj_model(proj)
+                proj_loss = F.cross_entropy(proj_out, proj_class)
+
+                # proj_loss.backward()
+
+                total_loss = loss + proj_loss
+            total_loss.backward()
+
             self.optim.step()
 
-            collection.add("loss", loss.item())
-            self.writer.add_scalars("batch", dict(loss=loss.item()), self.global_step)
+            # collection.add("proj_loss", proj_loss.item())
+            # self.writer.add_scalars("proj_batch", dict(loss=proj_loss.item()), self.global_step)
+            collection.add("loss", total_loss.item())
+            self.writer.add_scalars("batch", dict(loss=total_loss.item()), self.global_step)
             batch_metrics = dict()
             for metric_name, metric_f in self.metrics.items():
                 metric_slug = "metric_{}".format(metric_name)
@@ -153,14 +175,25 @@ class Trainer(object):
         self.model.eval()
 
         collection = Collector()
-        for batch_index, (img, mask, _) in enumerate(it):
+        for batch_index, (img, mask, class_mask) in enumerate(it):
             img, mask = img.to(self.device), mask.to(self.device)
 
             with torch.no_grad():
                 out = self.model(img)
                 loss = self.criterion(out, mask)
 
-            collection.add("loss", loss.item())
+                out_mask = out.detach().sigmoid() > 0.5
+                proj, proj_class = process_batch_torch_wrap(img.detach().cpu(), out_mask.cpu(), class_mask)
+                if proj.shape[0] == 0:
+                    total_loss = loss
+                else:
+                    proj, proj_class = proj.to(self.device), proj_class.to(self.device)
+                    proj_out = self.proj_model(proj)
+                    proj_loss = F.cross_entropy(proj_out, proj_class)
+
+                    total_loss = loss + proj_loss
+
+            collection.add("loss", total_loss.item())
             batch_metrics = dict()
             for metric_name, metric_f in self.metrics.items():
                 metric_slug = "metric_{}".format(metric_name)

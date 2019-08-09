@@ -35,7 +35,7 @@ def process_entry_numpy(in_img, pred_mask, true_mask):
     pred_classes = [0] * len(pred_rectangles)
     for rect_i, rect in enumerate(pred_rectangles):
         best_iou = 0.5
-        for class_id, true_rect in zip(true_rectangles, true_classes):
+        for class_id, true_rect in zip(true_classes, true_rectangles):
             iou = bb_intersection_over_union_numpy(rect, true_rect)
             if iou > best_iou:
                 pred_classes[rect_i] = class_id
@@ -51,7 +51,7 @@ def process_entry_numpy(in_img, pred_mask, true_mask):
         patch = cv2.resize(in_img[y:y+h, x:x+w], (100, 100))
         x_projection = patch.sum(0)
         y_projection = patch.sum(1)
-        projections.append([x_projection, y_projection])
+        projections.append([[x_projection], [y_projection]])
     return projections, classes
 
 
