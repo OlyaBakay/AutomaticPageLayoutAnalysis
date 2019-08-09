@@ -245,13 +245,17 @@ class Trainer(object):
                 label = Region.CATEGORIES[class_i]
                 # cv2.drawContours(img, [region.contour], 0, (0, 255, 0), 2)
 
-                # t_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_PLAIN, 3, 2)[0]
-                # top_left_corner = y, x
-                # right_bottom_corner = y+h + t_size[0] + 3, x+w + t_size[1] + 4
-                #
-                # cv2.rectangle(img, top_left_corner, right_bottom_corner, (0, 255, 0), -1)
-                # cv2.putText(img, label, (top_left_corner[0], top_left_corner[1] + 32), cv2.FONT_HERSHEY_PLAIN, 3,
-                #             [225, 255, 255], 2)
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                fontScale = 0.2
+                lineType = 1
+                t_size = cv2.getTextSize(label, font, fontScale, lineType)[0]
+                top_left_corner = x, y
+                right_bottom_corner = x + t_size[0] + 3, y + t_size[1] + 4
+
+                cv2.rectangle(img, top_left_corner, right_bottom_corner, (0, 255, 0), -1)
+                cv2.putText(img, label, (top_left_corner[0]+1, top_left_corner[1]+t_size[1]+2),
+                            font, fontScale,
+                            [225, 255, 255], lineType)
 
             img = torch.from_numpy(img.transpose(2, 0, 1) / 255.0)
             self.writer.add_image("{}/image-{}".format(general_tag, image_index + 1), img, epoch)
