@@ -16,7 +16,8 @@ def extract_masks_rects(mask):
 
         i_mask = mask == i
         contours, _ = cv2.findContours(i_mask.astype(np.uint8), 1, 2)
-        rect = cv2.boundingRect(contours[0])
+        biggest_cntr = max(contours, key=cv2.contourArea)
+        rect = cv2.boundingRect(biggest_cntr)
         rectangles.append(rect)
 
         x, y, w, h = rect
@@ -26,7 +27,7 @@ def extract_masks_rects(mask):
     return masks, rectangles, classes
 
 
-def process_entry_numpy(in_img, pred_mask, true_mask):
+def process_entry_numpy(in_img, pred_mask, true_mask, filter_masks=True):
     assert len(in_img.shape) == 2
     pred_mask = measure.label(pred_mask, background=0)
     _, pred_rectangles, _ = extract_masks_rects(pred_mask)
@@ -42,9 +43,10 @@ def process_entry_numpy(in_img, pred_mask, true_mask):
                 best_iou = iou
     projections = []
     classes = []
+    rectangles = []
     in_img = in_img.astype(np.float)
     for class_id, pred_rect in zip(pred_classes, pred_rectangles):
-        if class_id == 0:
+        if class_id == 0 and filter_masks:
             continue
         classes.append(class_id - 1)
         x, y, w, h = pred_rect
@@ -52,29 +54,40 @@ def process_entry_numpy(in_img, pred_mask, true_mask):
         x_projection = patch.sum(0)
         y_projection = patch.sum(1)
         projections.append([[x_projection], [y_projection]])
-    return projections, classes
+        rectangles.append(pred_rect)
+    return projections, rectangles, classes
 
 
-def process_batch_numpy(in_img, pred_mask, label_mask):
+def process_batch_numpy(in_img, pred_mask, label_mask, filter_masks=True):
     assert len(pred_mask.shape) == 3
     assert len(label_mask.shape) == 3
     N = pred_mask.shape[0]
 
-    projections, classes = [], []
+    projections, classes, rectangles, image_index = [], [], [], []
     for i in range(N):
-        i_projections, i_classes = process_entry_numpy(in_img[i], pred_mask[i], label_mask[i])
+        i_projections, i_rectangles, i_classes = process_entry_numpy(in_img[i],
+                                                                     pred_mask[i],
+                                                                     label_mask[i],
+                                                                     filter_masks)
         projections += i_projections
         classes += i_classes
+        rectangles += i_rectangles
+        image_index += [i] * len(i_classes)
     projections = np.array(projections, dtype=np.float)
     classes = np.array(classes, dtype=np.int)
-    return projections, classes
+    rectangles = np.array(rectangles, dtype=np.int)
+    return projections, rectangles, classes, image_index
 
 
-def process_batch_torch_wrap(batch_img, batch_pred, batch_mask):
+def process_batch_torch_wrap(batch_img, batch_pred, batch_mask, filter_masks=True):
     batch_img = batch_img.detach().squeeze(1).numpy()
     batch_pred = batch_pred.detach().squeeze(1).numpy()
     batch_mask = batch_mask.detach().numpy()
-    projections, classes = process_batch_numpy(batch_img, batch_pred, batch_mask)
+    projections, rectangles, classes, image_index = process_batch_numpy(batch_img,
+                                                           batch_pred,
+                                                           batch_mask,
+                                                           filter_masks)
     projections = torch.from_numpy(projections).float()
     classes = torch.from_numpy(classes).long()
-    return projections, classes
+    rectangles = torch.from_numpy(rectangles).long()
+    return projections, rectangles, classes, image_index

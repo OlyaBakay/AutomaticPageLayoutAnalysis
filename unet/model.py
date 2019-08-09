@@ -127,7 +127,7 @@ class Fast1D(nn.Module):
         self.fc2 = nn.Linear(50, outputs)
 
     def forward(self, X):
-        print(X.shape)
+        # print(X.shape)
         x, y = X[:, 0], X[:, 1]
         # Max pooling over a (2, 2) window
         x = F.max_pool1d(F.relu(self.conv1_x(x)), 2)

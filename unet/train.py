@@ -34,6 +34,7 @@ from albumentations import (
     Resize
 )
 
+from utils.region import Region
 from .datasets import MaskDataset
 from .collector import Collector
 from .metrics import iou_pytorch
@@ -130,7 +131,7 @@ class Trainer(object):
             # loss.backward()
 
             out_mask = out.detach().sigmoid() > 0.5
-            proj, proj_class = process_batch_torch_wrap(img.detach().cpu(), out_mask.cpu(), class_mask)
+            proj, _, proj_class, _ = process_batch_torch_wrap(img.detach().cpu(), out_mask.cpu(), class_mask)
             if proj.shape[0] == 0:
                 total_loss = loss
             else:
@@ -183,15 +184,19 @@ class Trainer(object):
                 loss = self.criterion(out, mask)
 
                 out_mask = out.detach().sigmoid() > 0.5
-                proj, proj_class = process_batch_torch_wrap(img.detach().cpu(), out_mask.cpu(), class_mask)
+                proj, rectangles, proj_class, image_index = process_batch_torch_wrap(img.detach().cpu(), out_mask.cpu(), class_mask, filter_masks=False)
+
+                total_loss = loss
                 if proj.shape[0] == 0:
-                    total_loss = loss
+                    not_enough_rects = True
                 else:
+                    not_enough_rects = False
                     proj, proj_class = proj.to(self.device), proj_class.to(self.device)
                     proj_out = self.proj_model(proj)
-                    proj_loss = F.cross_entropy(proj_out, proj_class)
 
-                    total_loss = loss + proj_loss
+                    if (proj_class >= 0).sum() > 0:
+                        proj_loss = F.cross_entropy(proj_out[proj_class >= 0], proj_class[proj_class >= 0])
+                        total_loss = loss + proj_loss
 
             collection.add("loss", total_loss.item())
             batch_metrics = dict()
@@ -204,12 +209,52 @@ class Trainer(object):
 
             it.set_postfix(loss=loss.item(), **batch_metrics)
 
-            if batch_index == 0:
-                self._write_images("val", img, out.sigmoid(), epoch_number)
+            if batch_index == 0 and not_enough_rects is False:
+                self._write_images_with_class("val", img, out_mask, rectangles, proj_out, image_index, epoch_number)
 
         epoch_reduced_metrics = {metric_name: np.mean(collection[metric_name]) for metric_name in collection.keys()}
         epoch_loss = epoch_reduced_metrics.pop("loss")
         return epoch_loss, epoch_reduced_metrics
+
+    def _write_images_with_class(self, general_tag, imgs, pred_masks, rectangles, classes, image_index, epoch):
+        # B, C, W, H
+        imgs = imgs.detach().cpu().squeeze(1).numpy() * 255
+        pred_masks = pred_masks.detach().cpu().squeeze(1).numpy() > 0.5
+        # print(pred_masks.shape, pred_masks.dtype)
+        N = imgs.shape[0]
+
+        # print(classes.shape)
+        rectangles = rectangles.detach().cpu().numpy()
+        classes = classes.detach().cpu().argmax(1).numpy()
+
+        grouped_rectangles = [[] for _ in range(N)]
+        grouped_classes = [[] for _ in range(N)]
+        for image_i, class_i, rect_i in zip(image_index, classes, rectangles):
+            grouped_classes[image_i].append(class_i)
+            grouped_rectangles[image_i].append(rect_i)
+
+        for image_index in range(N):
+            img = cv2.cvtColor(imgs[image_index], cv2.COLOR_GRAY2RGB).astype(np.float)
+            mask = pred_masks[image_index]
+            img[mask] = img[mask] / 2.0 + [127.5, 0.0, 0.0]
+            regions = grouped_rectangles[image_index]
+            classes = grouped_classes[image_index]
+            for i, (region_i, class_i) in enumerate(zip(regions, classes)):
+                x,y,w,h = region_i
+                cv2.rectangle(img, (x, y), (x + w, y + h), (0, 255, 0), 2)
+                label = Region.CATEGORIES[class_i]
+                # cv2.drawContours(img, [region.contour], 0, (0, 255, 0), 2)
+
+                # t_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_PLAIN, 3, 2)[0]
+                # top_left_corner = y, x
+                # right_bottom_corner = y+h + t_size[0] + 3, x+w + t_size[1] + 4
+                #
+                # cv2.rectangle(img, top_left_corner, right_bottom_corner, (0, 255, 0), -1)
+                # cv2.putText(img, label, (top_left_corner[0], top_left_corner[1] + 32), cv2.FONT_HERSHEY_PLAIN, 3,
+                #             [225, 255, 255], 2)
+
+            img = torch.from_numpy(img.transpose(2, 0, 1) / 255.0)
+            self.writer.add_image("{}/image-{}".format(general_tag, image_index + 1), img, epoch)
 
     def _write_images(self, general_tag, imgs, masks, epoch):
         # B, C, W, H
@@ -220,7 +265,7 @@ class Trainer(object):
             img = cv2.cvtColor(imgs[image_index], cv2.COLOR_GRAY2RGB).astype(np.float)
             mask = masks[image_index]
             img[mask] = img[mask] / 2 + [0.0, 127.5, 0.0]
-            img = torch.Tensor(img.transpose(2, 0, 1) / 255.0)
+            img = torch.from_numpy(img.transpose(2, 0, 1) / 255.0)
             self.writer.add_image("{}/image-{}".format(general_tag, image_index + 1), img, epoch)
 
     def train(self):
