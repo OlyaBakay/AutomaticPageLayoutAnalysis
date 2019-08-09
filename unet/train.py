@@ -115,7 +115,7 @@ class Trainer(object):
         self.model.train()
 
         collection = Collector()
-        for batch_index, (img, mask) in enumerate(it):
+        for batch_index, (img, mask, _) in enumerate(it):
             img, mask = img.to(self.device), mask.to(self.device)
 
             self.optim.zero_grad()
@@ -153,7 +153,7 @@ class Trainer(object):
         self.model.eval()
 
         collection = Collector()
-        for batch_index, (img, mask) in enumerate(it):
+        for batch_index, (img, mask, _) in enumerate(it):
             img, mask = img.to(self.device), mask.to(self.device)
 
             with torch.no_grad():

@@ -25,7 +25,7 @@ class Region:
                      SEPARATOR: [SEPARATOR],
                      MATHS: [MATHS],
                      GRAPHIC: [HANDWRITTEN_ANNOTATION, OTHER]}
-    CATEGORIES = list(SUBCATEGORIES.keys())
+    CATEGORIES = [TEXT, IMAGE, SEPARATOR, MATHS, GRAPHIC]
 
     LEVEL_ALL = -1
     LEVEL_CATEGORY = 0

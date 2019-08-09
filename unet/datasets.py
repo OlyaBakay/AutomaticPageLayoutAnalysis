@@ -26,31 +26,36 @@ class MaskDataset(Dataset):
         file = self.files[index]
         image_object = supervisely.parse_json(file)
         grey = cv2.cvtColor(image_object.image, cv2.COLOR_BGR2GRAY)
-        mask = np.zeros_like(grey, dtype=np.bool)
+        mask = np.zeros_like(grey, dtype=np.int32)
 
         for region in image_object.regions:
             if region.category in self.categories:
                 mn = np.min(region.contour, axis=0)
                 mx = np.max(region.contour, axis=0)
-                mask[mn[1]:mx[1], mn[0]:mx[0]] = True
-        mask = (mask > 0).astype(np.uint)
+                mask[mn[1]:mx[1], mn[0]:mx[0]] = region.category_id
+        # mask = (mask > 0).astype(np.uint)
 
         if self.augmentations:
             augmented = self.augmentations(image=grey, mask=mask)
             grey = augmented['image']
-            mask = augmented['mask'] > 0
+            mask = augmented['mask']
         else:
             grey = cv2.resize(grey, (736, 1024))
-            mask = cv2.resize(mask.astype(np.float), (736, 1024)) > 0
+            mask = cv2.resize(mask.astype(np.float), (736, 1024))
+
+        # mask.dtype has been bool.
+        mask_with_class = mask.astype(np.int32).copy()
+        mask_with_class = torch.from_numpy(mask_with_class).long()
+        mask = mask > 0
 
         # TODO: fix
         if self.transform_img:
             grey = self.transform_img(grey)
         else:
-            grey = torch.Tensor(grey.astype(np.float) / 255.0).float().unsqueeze(0)
+            grey = torch.from_numpy(grey.astype(np.float) / 255.0).float().unsqueeze(0)
         if self.transform_mask:
             mask = self.transform_mask(mask)
         else:
-            mask = torch.Tensor(mask).float().unsqueeze(0)
+            mask = torch.from_numpy(mask).float().unsqueeze(0)
 
-        return grey, mask
+        return grey, mask, mask_with_class
