@@ -8,6 +8,26 @@ import torch
 from utils import supervisely
 
 
+def semisuper_contour_gt(img):
+    mask = img != 255
+    coords = np.argwhere(mask)
+    # indices in unique/sorted by first coord
+    indeces = np.unique(coords[:,0], return_index=True)[1]
+    # for each Y first in line, by X
+    bounds1 = coords[indeces]
+    # last of current line
+    # then reverse so we can create a controur
+    # going from left top to left bottom
+    # then from right bottom to right top !!!
+    bounds2 = coords[np.roll(indeces - 1, -1)][::-1]
+
+    bounds1[:,[1,0]] = bounds1[:,[0,1]]
+    bounds2[:,[1,0]] = bounds2[:,[0,1]]
+    mask = np.zeros_like(mask, dtype=np.uint8)
+    cv2.drawContours(mask, [np.concatenate((bounds1, bounds2))], -1, (1), -1)
+    return mask
+
+
 class MaskDataset(Dataset):
     ANNOTATION_FOLDER = supervisely.ANNOTATION_FOLDER
     def __init__(self, files, categories=("text", "maths", "separator"),
@@ -32,7 +52,10 @@ class MaskDataset(Dataset):
             if region.category in self.categories:
                 mn = np.min(region.contour, axis=0)
                 mx = np.max(region.contour, axis=0)
-                mask[mn[1]:mx[1], mn[0]:mx[0]] = region.category_id
+                img_patch = grey[mn[1]:mx[1], mn[0]:mx[0]]
+                semi_mask = semisuper_contour_gt(img_patch).astype(np.int32)
+                semi_mask[semi_mask > 0.5] = region.category_id
+                mask[mn[1]:mx[1], mn[0]:mx[0]] = semi_mask
         # mask = (mask > 0).astype(np.uint)
 
         if self.augmentations:
