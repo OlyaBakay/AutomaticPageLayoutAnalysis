@@ -62,3 +62,10 @@ def bb_intersection_over_union_numpy(boxA, boxB):
 
     # return the intersection over union value
     return iou
+
+
+def accuracy(pred, true):
+    return ((pred == true).float()).mean()
+
+def accuracy_wrapper(pred, true):
+    return accuracy(pred.argmax(1).long(), true.long())

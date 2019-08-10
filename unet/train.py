@@ -38,7 +38,7 @@ from albumentations import (
 from utils.region import Region
 from .datasets import MaskDataset
 from .collector import Collector
-from .metrics import iou_pytorch
+from .metrics import iou_pytorch, accuracy_wrapper
 from .projections import process_batch_torch_wrap
 
 
@@ -165,13 +165,23 @@ class Trainer(object):
                     metric_value = metric_f(out, mask, reduce=True).item()
                 collection.add(metric_slug, metric_value)
                 batch_metrics[metric_slug] = metric_value
+            with torch.no_grad():
+                metric_slug = "metric_proj_acc"
+                if not_enough_rects:
+                    metric_value = 0
+                else:
+                    # print(proj_out.shape, proj_class.shape, (proj_class >= 0).sum())
+                    metric_value = accuracy_wrapper(proj_out[proj_class >= 0].cpu(), proj_class[proj_class >= 0].cpu())
+                collection.add(metric_slug, metric_value)
+                batch_metrics[metric_slug] = metric_value
+
             self.writer.add_scalars("batch", batch_metrics, self.global_step)
 
 
             it.set_postfix(loss=loss.item(), **batch_metrics)
             class_counts = pd.Series.value_counts(proj_class.cpu().detach().numpy()).to_dict()
             class_counts = {class_name: class_counts.get(class_index, 0) for class_index, class_name in enumerate(Region.CATEGORIES)}
-            self.writer.add_scalars("batch_proj_class_dist", class_counts, self.global_step)
+            self.writer.add_scalars("batch/proj_class_dist", class_counts, self.global_step)
 
             self.global_step += 1
 
@@ -223,6 +233,14 @@ class Trainer(object):
                 metric_slug = "metric_{}".format(metric_name)
                 with torch.no_grad():
                     metric_value = metric_f(out, mask, reduce=True).item()
+                collection.add(metric_slug, metric_value)
+                batch_metrics[metric_slug] = metric_value
+            with torch.no_grad():
+                metric_slug = "metric_proj_acc"
+                if not_enough_rects or (proj_class >= 0).sum() == 0:
+                    metric_value = 0
+                else:
+                    metric_value = accuracy_wrapper(proj_out[proj_class >= 0].cpu(), proj_class[proj_class >= 0].cpu())
                 collection.add(metric_slug, metric_value)
                 batch_metrics[metric_slug] = metric_value
 
@@ -302,9 +320,9 @@ class Trainer(object):
             print("Train loss epoch[{}] = {}".format(i_epoch, train_loss))
             val_loss, val_metrics = self.val_epoch(self.epoch)
             print("Val loss epoch[{}] = {}".format(i_epoch, val_loss))
-            self.writer.add_scalars("epoch_total_loss", dict(train=train_loss, val=val_loss), i_epoch)
+            self.writer.add_scalars("epoch/total_loss", dict(train=train_loss, val=val_loss), i_epoch)
             for metric_name in train_metrics.keys():
-                self.writer.add_scalars("epoch_{}".format(metric_name),
+                self.writer.add_scalars("epoch/{}".format(metric_name),
                                         dict(train=train_metrics[metric_name],
                                              val=val_metrics[metric_name]), i_epoch)
 
