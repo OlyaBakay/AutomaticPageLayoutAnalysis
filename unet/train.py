@@ -171,7 +171,7 @@ class Trainer(object):
             it.set_postfix(loss=loss.item(), **batch_metrics)
             class_counts = pd.Series.value_counts(proj_class.cpu().detach().numpy()).to_dict()
             class_counts = {class_name: class_counts.get(class_index, 0) for class_index, class_name in enumerate(Region.CATEGORIES)}
-            self.writer.add_scalars("proj_class_dist", class_counts, self.global_step)
+            self.writer.add_scalars("batch_proj_class_dist", class_counts, self.global_step)
 
             self.global_step += 1
 
