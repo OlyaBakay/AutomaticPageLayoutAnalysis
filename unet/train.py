@@ -187,7 +187,7 @@ class Trainer(object):
 
 
             if batch_index == 0 and not_enough_rects is False:
-                self._write_images_with_class("train", img, out_mask, rectangles, proj_out, image_index, epoch_number)
+                self._write_images_with_class("train", img, out_mask, rectangles, proj_out, proj_class, image_index, epoch_number)
             elif batch_index == 0:
                 self._write_images("train", img, out.sigmoid(), epoch_number)
 
@@ -247,7 +247,7 @@ class Trainer(object):
             it.set_postfix(loss=loss.item(), **batch_metrics)
 
             if batch_index == 0 and not_enough_rects is False:
-                self._write_images_with_class("val", img, out_mask, rectangles, proj_out, image_index, epoch_number)
+                self._write_images_with_class("val", img, out_mask, rectangles, proj_out, proj_class, image_index, epoch_number)
             elif batch_index == 0:
                 self._write_images("val", img, out.sigmoid(), epoch_number)
 
@@ -255,22 +255,28 @@ class Trainer(object):
         epoch_loss = epoch_reduced_metrics.pop("total_loss")
         return epoch_loss, epoch_reduced_metrics
 
-    def _write_images_with_class(self, general_tag, imgs, pred_masks, rectangles, classes, image_index, epoch):
+    def _write_images_with_class(self, general_tag, imgs, pred_masks, rectangles, pred_classes, true_classes, image_index, epoch):
         # B, C, W, H
         imgs = imgs.detach().cpu().squeeze(1).numpy() * 255
         pred_masks = pred_masks.detach().cpu().squeeze(1).numpy() > 0.5
         # print(pred_masks.shape, pred_masks.dtype)
         N = imgs.shape[0]
 
+        def map_class(index):
+            if index >= 0:
+                return Region.CATEGORIES[index]
+            return "bad"
+
         # print(classes.shape)
         rectangles = rectangles.detach().cpu().numpy()
-        classes = classes.detach().cpu().argmax(1).numpy()
+        pred_classes = pred_classes.detach().cpu().argmax(1).numpy()
+        true_classes = true_classes.detach().cpu().numpy()
 
         grouped_rectangles = [[] for _ in range(N)]
         grouped_classes = [[] for _ in range(N)]
-        for image_i, class_i, rect_i in zip(image_index, classes, rectangles):
-            grouped_classes[image_i].append(class_i)
-            grouped_rectangles[image_i].append(rect_i)
+        for i, image_i in enumerate(image_index):
+            grouped_classes[image_i].append([true_classes[i], pred_classes[i]])
+            grouped_rectangles[image_i].append(rectangles[i])
 
         for image_index in range(N):
             img = cv2.cvtColor(imgs[image_index], cv2.COLOR_GRAY2RGB).astype(np.float)
@@ -281,11 +287,13 @@ class Trainer(object):
             for i, (region_i, class_i) in enumerate(zip(regions, classes)):
                 x,y,w,h = region_i
                 cv2.rectangle(img, (x, y), (x + w, y + h), (0, 255, 0), 2)
-                label = Region.CATEGORIES[class_i]
+                true_class_i, pred_class_i = class_i
+                label = "t:{};p:{}".format(map_class(true_class_i),
+                                           map_class(pred_class_i))
                 # cv2.drawContours(img, [region.contour], 0, (0, 255, 0), 2)
 
                 font = cv2.FONT_HERSHEY_SIMPLEX
-                fontScale = 0.2
+                fontScale = 0.55
                 lineType = 1
                 t_size = cv2.getTextSize(label, font, fontScale, lineType)[0]
                 top_left_corner = x, y

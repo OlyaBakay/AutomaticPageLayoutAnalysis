@@ -9,27 +9,30 @@ def extract_masks_rects(mask):
     rectangles = []
     masks = []
     classes = []
-    for i in np.unique(mask):
-        if i == 0:
+    for class_id in np.unique(mask):
+        if class_id == 0:
             continue
-        classes.append(i)
+        labeled_mask = measure.label(mask == class_id, background=0)
+        for i in np.unique(labeled_mask):
+            if i == 0:
+                continue
+            classes.append(class_id)
 
-        i_mask = mask == i
-        contours, _ = cv2.findContours(i_mask.astype(np.uint8), 1, 2)
-        biggest_cntr = max(contours, key=cv2.contourArea)
-        rect = cv2.boundingRect(biggest_cntr)
-        rectangles.append(rect)
+            i_mask = labeled_mask == i
+            contours, _ = cv2.findContours(i_mask.astype(np.uint8), 1, 2)
+            biggest_cntr = max(contours, key=cv2.contourArea)
+            rect = cv2.boundingRect(biggest_cntr)
+            rectangles.append(rect)
 
-        x, y, w, h = rect
-        i_mask = np.zeros_like(i_mask)
-        i_mask[y:y + h, x:x + w] = True
-        masks.append(i_mask)
+            x, y, w, h = rect
+            i_mask = np.zeros_like(i_mask)
+            i_mask[y:y + h, x:x + w] = True
+            masks.append(i_mask)
     return masks, rectangles, classes
 
 
 def process_entry_numpy(in_img, pred_mask, true_mask, filter_masks=True):
     assert len(in_img.shape) == 2
-    pred_mask = measure.label(pred_mask, background=0)
     _, pred_rectangles, _ = extract_masks_rects(pred_mask)
     _, true_rectangles, true_classes = extract_masks_rects(true_mask)
 
