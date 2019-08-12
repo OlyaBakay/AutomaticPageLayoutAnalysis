@@ -1,4 +1,4 @@
-experiment: default
+experiment: default_test
 data:
   seed: 42
   train_fraction: 0.8

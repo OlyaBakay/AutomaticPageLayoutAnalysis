@@ -39,7 +39,7 @@ from utils.region import Region
 from .datasets import MaskDataset
 from .collector import Collector
 from .metrics import iou_pytorch, accuracy_wrapper
-from .projections import process_batch_torch_wrap
+from .projections import process_batch_torch_wrap, process_patches
 
 
 class Trainer(object):
@@ -90,9 +90,9 @@ class Trainer(object):
     def load_model(self):
         config = self.config["model"]
         # Different models
-        from .model import UNet, Fast1D
+        from .model import UNet, Fast1D, SqueezeNet
         # TODO: fix `5` magic constant
-        return UNet(**config["params"]).to(self.device), Fast1D(5).to(self.device)
+        return UNet(**config["params"]).to(self.device), SqueezeNet(num_classes=5, pretrained=True).to(self.device)#Fast1D(outputs=5).to(self.device)
 
     def load_datasets(self):
         config = self.config["data"]
@@ -133,6 +133,10 @@ class Trainer(object):
 
             out_mask = out.detach().sigmoid() > 0.5
             proj, rectangles, proj_class, image_index = process_batch_torch_wrap(img.detach().cpu(), out_mask.cpu(), class_mask, filter_masks=True)
+            sizes = [[w, h] for _, _, w, h in rectangles]
+            if len(sizes):
+                self.writer.add_scalars("batch/mean", dict(W=np.mean(sizes, 0)[0],
+                                                          H=np.mean(sizes, 0)[1]), self.global_step)
 
             total_loss = loss
             proj_loss = torch.zeros(1)
@@ -141,7 +145,9 @@ class Trainer(object):
             else:
                 not_enough_rects = False
                 proj, proj_class = proj.to(self.device), proj_class.to(self.device)
-                proj_out = self.proj_model(proj)
+                self.writer.add_scalars("batch/proj_B_size", dict(train=proj.size(0)), self.global_step)
+                # TODO: Squeeze Patch
+                proj_out = self.proj_model(process_patches(img, rectangles, image_index).to(self.device))
 
                 if (proj_class >= 0).sum() > 0:
                     proj_loss = F.cross_entropy(proj_out[proj_class >= 0], proj_class[proj_class >= 0])
@@ -171,7 +177,7 @@ class Trainer(object):
                     metric_value = 0
                 else:
                     # print(proj_out.shape, proj_class.shape, (proj_class >= 0).sum())
-                    metric_value = accuracy_wrapper(proj_out[proj_class >= 0].cpu(), proj_class[proj_class >= 0].cpu())
+                    metric_value = accuracy_wrapper(proj_out[proj_class >= 0].cpu(), proj_class[proj_class >= 0].cpu()).item()
                 collection.add(metric_slug, metric_value)
                 batch_metrics[metric_slug] = metric_value
 
@@ -219,7 +225,14 @@ class Trainer(object):
                 else:
                     not_enough_rects = False
                     proj, proj_class = proj.to(self.device), proj_class.to(self.device)
-                    proj_out = self.proj_model(proj)
+                    patches = process_patches(img, rectangles, image_index).to(self.device)
+                    if patches.shape[0]:
+                        proj_out = []
+                        for start in range(0, len(patches), 32):
+                            proj_out_slice = self.proj_model(patches[start: start+32])
+                            proj_out.append(proj_out_slice)
+                        proj_out = torch.cat(proj_out)
+                    self.writer.add_scalars("batch/proj_B_size", dict(val=proj.size(0)), self.val_global_step)
 
                     if (proj_class >= 0).sum() > 0:
                         proj_loss = F.cross_entropy(proj_out[proj_class >= 0], proj_class[proj_class >= 0])
@@ -240,7 +253,7 @@ class Trainer(object):
                 if not_enough_rects or (proj_class >= 0).sum() == 0:
                     metric_value = 0
                 else:
-                    metric_value = accuracy_wrapper(proj_out[proj_class >= 0].cpu(), proj_class[proj_class >= 0].cpu())
+                    metric_value = accuracy_wrapper(proj_out[proj_class >= 0].cpu(), proj_class[proj_class >= 0].cpu()).item()
                 collection.add(metric_slug, metric_value)
                 batch_metrics[metric_slug] = metric_value
 
@@ -250,6 +263,7 @@ class Trainer(object):
                 self._write_images_with_class("val", img, out_mask, rectangles, proj_out, proj_class, image_index, epoch_number)
             elif batch_index == 0:
                 self._write_images("val", img, out.sigmoid(), epoch_number)
+            self.val_global_step += 1
 
         epoch_reduced_metrics = {metric_name: np.mean(collection[metric_name]) for metric_name in collection.keys()}
         epoch_loss = epoch_reduced_metrics.pop("total_loss")
@@ -321,6 +335,7 @@ class Trainer(object):
 
     def train(self):
         self.global_step = 0
+        self.val_global_step = 0
         best_value = None
         for i_epoch in range(self.config["train"]["epochs"]):
             self.epoch = i_epoch

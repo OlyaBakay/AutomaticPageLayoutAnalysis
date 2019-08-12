@@ -94,3 +94,16 @@ def process_batch_torch_wrap(batch_img, batch_pred, batch_mask, filter_masks=Tru
     classes = torch.from_numpy(classes).long()
     rectangles = torch.from_numpy(rectangles).long()
     return projections, rectangles, classes, image_index
+
+
+def process_patches(batch_img, rectangles, indices):
+    batch_img = batch_img.cpu().detach().numpy()
+    resized_patches = []
+    for index, rect in zip(indices, rectangles):
+        img = batch_img[index]
+        x, y, w, h = rect
+        patch = img[0, y:y+h, x:x+w]
+        patch = cv2.resize(patch, (128, 32))
+        resized_patches.append(patch)
+    resized_patches = np.array(resized_patches)
+    return torch.from_numpy(resized_patches).unsqueeze(1)

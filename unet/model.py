@@ -4,6 +4,27 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.model_zoo
+import torchvision.models
+
+
+class SqueezeNet(nn.Module):
+    def __init__(self, num_classes, pretrained=False):
+        super(SqueezeNet, self).__init__()
+        self.num_classes = num_classes
+
+        model = torchvision.models.squeezenet1_0(pretrained=pretrained)
+        classifier = list(model.classifier)
+        final_conv = classifier[1]
+        final_conv = nn.Conv2d(final_conv.in_channels, self.num_classes, kernel_size=1)
+        classifier[1] = final_conv
+        model.classifier = nn.Sequential(*classifier)
+        self.backbone = model
+
+    def forward(self, x):
+        B, C, W, H = x.shape
+        if C == 1:
+            x = x.expand(B, 3, W, H)
+        return self.backbone(x)
 
 
 class UNet(nn.Module):
