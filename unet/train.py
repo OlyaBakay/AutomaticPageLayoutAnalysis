@@ -38,7 +38,7 @@ from albumentations import (
 from utils.region import Region
 from .datasets import MaskDataset
 from .collector import Collector
-from .metrics import iou_pytorch, accuracy_wrapper
+from .metrics import iou_pytorch, accuracy_wrapper, special_accuracy
 from .projections import process_batch_torch_wrap, process_patches
 
 
@@ -132,7 +132,7 @@ class Trainer(object):
             # loss.backward()
 
             out_mask = out.detach().sigmoid() > 0.5
-            proj, rectangles, proj_class, image_index = process_batch_torch_wrap(img.detach().cpu(), out_mask.cpu(), class_mask, filter_masks=True)
+            proj, rectangles, proj_class, image_index, true_pred_map = process_batch_torch_wrap(img.detach().cpu(), out_mask.cpu(), class_mask, filter_masks=True)
             sizes = [[w, h] for _, _, w, h in rectangles]
             if len(sizes):
                 self.writer.add_scalars("batch/mean", dict(W=np.mean(sizes, 0)[0],
@@ -177,12 +177,17 @@ class Trainer(object):
                     metric_value = 0
                 else:
                     # print(proj_out.shape, proj_class.shape, (proj_class >= 0).sum())
-                    metric_value = accuracy_wrapper(proj_out[proj_class >= 0].cpu(), proj_class[proj_class >= 0].cpu()).item()
+                    metric_value = special_accuracy(proj_out[proj_class >= 0].cpu(), proj_class[proj_class >= 0].cpu(), true_pred_map).item()
+                collection.add(metric_slug, metric_value)
+                print(metric_value)
+                batch_metrics[metric_slug] = metric_value
+
+                metric_slug = "metric_found_rects"
+                metric_value = (true_pred_map >= 0).float().mean().item()
                 collection.add(metric_slug, metric_value)
                 batch_metrics[metric_slug] = metric_value
 
             self.writer.add_scalars("batch", batch_metrics, self.global_step)
-
 
             it.set_postfix(loss=loss.item(), **batch_metrics)
             class_counts = pd.Series.value_counts(proj_class.cpu().detach().numpy()).to_dict()
@@ -216,7 +221,7 @@ class Trainer(object):
                 loss = self.criterion(out, mask)
 
                 out_mask = out.detach().sigmoid() > 0.5
-                proj, rectangles, proj_class, image_index = process_batch_torch_wrap(img.detach().cpu(), out_mask.cpu(), class_mask, filter_masks=False)
+                proj, rectangles, proj_class, image_index, true_pred_map = process_batch_torch_wrap(img.detach().cpu(), out_mask.cpu(), class_mask, filter_masks=False)
 
                 total_loss = loss
                 proj_loss = torch.zeros(1)
@@ -253,7 +258,13 @@ class Trainer(object):
                 if not_enough_rects or (proj_class >= 0).sum() == 0:
                     metric_value = 0
                 else:
-                    metric_value = accuracy_wrapper(proj_out[proj_class >= 0].cpu(), proj_class[proj_class >= 0].cpu()).item()
+                    metric_value = special_accuracy(proj_out.cpu(), proj_class.cpu(), true_pred_map).item()
+                print(metric_value)
+                collection.add(metric_slug, metric_value)
+                batch_metrics[metric_slug] = metric_value
+
+                metric_slug = "metric_found_rects"
+                metric_value = (true_pred_map >= 0).float().mean().item()
                 collection.add(metric_slug, metric_value)
                 batch_metrics[metric_slug] = metric_value
 

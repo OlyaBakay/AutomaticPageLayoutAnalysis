@@ -23,8 +23,9 @@ def semisuper_contour_gt(img):
 
     bounds1[:,[1,0]] = bounds1[:,[0,1]]
     bounds2[:,[1,0]] = bounds2[:,[0,1]]
+    hull = cv2.convexHull(np.concatenate((bounds1, bounds2)))
     mask = np.zeros_like(mask, dtype=np.uint8)
-    cv2.drawContours(mask, [np.concatenate((bounds1, bounds2))], -1, (1), -1)
+    cv2.drawContours(mask, [hull], -1, (1), -1)
     return mask
 
 
@@ -45,6 +46,7 @@ class MaskDataset(Dataset):
     def __getitem__(self, index):
         file = self.files[index]
         image_object = supervisely.parse_json(file)
+        image_object = image_object.scale((736, 1024))
         grey = cv2.cvtColor(image_object.image, cv2.COLOR_BGR2GRAY)
         mask = np.zeros_like(grey, dtype=np.int32)
 
@@ -62,9 +64,9 @@ class MaskDataset(Dataset):
             augmented = self.augmentations(image=grey, mask=mask)
             grey = augmented['image']
             mask = augmented['mask']
-        else:
-            grey = cv2.resize(grey, (736, 1024))
-            mask = cv2.resize(mask.astype(np.float), (736, 1024))
+        # else:
+            # grey = cv2.resize(grey, (736, 1024))
+            # mask = cv2.resize(mask.astype(np.float), (736, 1024))
 
         # mask.dtype has been bool.
         mask_with_class = mask.astype(np.int32).copy()

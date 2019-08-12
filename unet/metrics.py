@@ -67,5 +67,17 @@ def bb_intersection_over_union_numpy(boxA, boxB):
 def accuracy(pred, true):
     return ((pred == true).float()).mean()
 
+
 def accuracy_wrapper(pred, true):
     return accuracy(pred.argmax(1).long(), true.long())
+
+
+def special_accuracy(pred, true, true_pred_map):
+    pred = pred.argmax(1).long().cpu()
+    true = true.long().cpu()
+    intersection = torch.zeros(len(true_pred_map), dtype=torch.uint8)
+    should_count_mask = true_pred_map > -1
+    # print(true_pred_map.dtype, pred.dtype, true.dtype, should_count_mask.dtype)
+    # print(true_pred_map.shape, pred.shape, true.shape, should_count_mask.shape)
+    intersection[should_count_mask] = (pred == true)[true_pred_map[should_count_mask]]
+    return intersection.float().mean()
