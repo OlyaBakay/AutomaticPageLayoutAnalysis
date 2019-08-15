@@ -38,7 +38,7 @@ from albumentations import (
 from utils.region import Region
 from .datasets import MaskDataset
 from .collector import Collector
-from .metrics import iou_pytorch, accuracy_wrapper, special_accuracy
+from .metrics import iou_pytorch, accuracy_wrapper, special_accuracy, mAP_wrapper, BoundingBoxes, maP_create_boxes, mAP_wrapper_from_boxes
 from .projections import process_batch_torch_wrap, process_patches
 
 
@@ -47,7 +47,7 @@ class Trainer(object):
         self.exp_path = exp_path
         self.device = device
         self.config = config
-        self.train_data, self.val_data = self.load_datasets()
+        self.train_data, self.val_data, self.test_data = self.load_datasets()
         print("Train", len(self.train_data))
         print("Val", len(self.val_data))
         self.criterion = self.load_criterion()
@@ -108,9 +108,14 @@ class Trainer(object):
         train_files = files[:int(len(files) * config["train_fraction"])]
         val_files = files[len(train_files):]
 
+        in_path = self.config["test"]["list"][0]
+        in_path = os.path.join(in_path, MaskDataset.ANNOTATION_FOLDER)
+        test_files = list(os.path.join(in_path, fn) for fn in os.listdir(in_path))
+
         train_dset = MaskDataset(train_files, augmentations=aug)
         val_dset = MaskDataset(val_files)
-        return train_dset, val_dset
+        test_dset = MaskDataset(test_files)
+        return train_dset, val_dset, test_dset
 
     def load_criterion(self):
         return nn.BCEWithLogitsLoss()
@@ -179,13 +184,23 @@ class Trainer(object):
                     # print(proj_out.shape, proj_class.shape, (proj_class >= 0).sum())
                     metric_value = special_accuracy(proj_out[proj_class >= 0].cpu(), proj_class[proj_class >= 0].cpu(), true_pred_map).item()
                 collection.add(metric_slug, metric_value)
-                print(metric_value)
                 batch_metrics[metric_slug] = metric_value
 
                 metric_slug = "metric_found_rects"
                 metric_value = (true_pred_map >= 0).float().mean().item()
                 collection.add(metric_slug, metric_value)
                 batch_metrics[metric_slug] = metric_value
+
+                if not_enough_rects is False:
+                    VOC_metrics = mAP_wrapper(rectangles,
+                                              pred_classes=proj_out,
+                                              image_indeces=image_index,
+                                              label_mask=class_mask)
+                    AP = np.mean([row["AP"] for row in VOC_metrics])
+                    metric_slug = "VOC_Metrics_AP"
+                    collection.add(metric_slug, AP)
+                    batch_metrics[metric_slug] = AP
+
 
             self.writer.add_scalars("batch", batch_metrics, self.global_step)
 
@@ -206,10 +221,10 @@ class Trainer(object):
         epoch_loss = epoch_reduced_metrics.pop("total_loss")
         return epoch_loss, epoch_reduced_metrics
 
-    def val_epoch(self, epoch_number):
-        config = self.config["val"]
-        it = data_utils.DataLoader(self.val_data, batch_size=config["batch"], num_workers=8, shuffle=False)
-        it = tqdm(it, desc="val[%d]" % epoch_number)
+    def val_epoch(self, epoch_number, name="val", data=None):
+        config = self.config[name]
+        it = data_utils.DataLoader(data, batch_size=config["batch"], num_workers=8, shuffle=False)
+        it = tqdm(it, desc="%s[%d]" % (name, epoch_number))
         self.model.eval()
 
         collection = Collector()
@@ -237,7 +252,6 @@ class Trainer(object):
                             proj_out_slice = self.proj_model(patches[start: start+32])
                             proj_out.append(proj_out_slice)
                         proj_out = torch.cat(proj_out)
-                    self.writer.add_scalars("batch/proj_B_size", dict(val=proj.size(0)), self.val_global_step)
 
                     if (proj_class >= 0).sum() > 0:
                         proj_loss = F.cross_entropy(proj_out[proj_class >= 0], proj_class[proj_class >= 0])
@@ -259,7 +273,6 @@ class Trainer(object):
                     metric_value = 0
                 else:
                     metric_value = special_accuracy(proj_out.cpu(), proj_class.cpu(), true_pred_map).item()
-                print(metric_value)
                 collection.add(metric_slug, metric_value)
                 batch_metrics[metric_slug] = metric_value
 
@@ -268,16 +281,110 @@ class Trainer(object):
                 collection.add(metric_slug, metric_value)
                 batch_metrics[metric_slug] = metric_value
 
+                if not_enough_rects is False:
+                    VOC_metrics = mAP_wrapper(rectangles,
+                                      pred_classes=proj_out,
+                                      image_indeces=image_index,
+                                      label_mask=class_mask)
+                    AP = np.mean([row["AP"] for row in VOC_metrics])
+                    metric_slug = "VOC_Metrics_AP"
+                    collection.add(metric_slug, AP)
+                    batch_metrics[metric_slug] = AP
+
+
             it.set_postfix(loss=loss.item(), **batch_metrics)
 
             if batch_index == 0 and not_enough_rects is False:
-                self._write_images_with_class("val", img, out_mask, rectangles, proj_out, proj_class, image_index, epoch_number)
+                self._write_images_with_class(name, img, out_mask, rectangles, proj_out, proj_class, image_index, epoch_number)
             elif batch_index == 0:
-                self._write_images("val", img, out.sigmoid(), epoch_number)
-            self.val_global_step += 1
+                self._write_images(name, img, out.sigmoid(), epoch_number)
 
         epoch_reduced_metrics = {metric_name: np.mean(collection[metric_name]) for metric_name in collection.keys()}
         epoch_loss = epoch_reduced_metrics.pop("total_loss")
+        return epoch_loss, epoch_reduced_metrics
+
+    def calc_metrics(self, epoch_number, name="val", data=None, batchsize=4):
+        it = data_utils.DataLoader(data, batch_size=batchsize, num_workers=8, shuffle=False)
+        it = tqdm(it, desc="%s[%d]" % (name, epoch_number))
+        self.model.eval()
+
+        collection = Collector()
+        boxes = BoundingBoxes()
+        iou = []
+        for batch_index, (img, mask, class_mask) in enumerate(it):
+            img, mask = img.to(self.device), mask.to(self.device)
+
+            with torch.no_grad():
+                out = self.model(img)
+                loss = self.criterion(out, mask)
+
+                out_mask = out.detach().sigmoid() > 0.5
+                proj, rectangles, proj_class, image_index, true_pred_map = process_batch_torch_wrap(img.detach().cpu(), out_mask.cpu(), class_mask, filter_masks=False)
+
+                total_loss = loss
+                proj_loss = torch.zeros(1)
+                if proj.shape[0] == 0:
+                    not_enough_rects = True
+                else:
+                    not_enough_rects = False
+                    proj, proj_class = proj.to(self.device), proj_class.to(self.device)
+                    patches = process_patches(img, rectangles, image_index).to(self.device)
+                    if patches.shape[0]:
+                        proj_out = []
+                        for start in range(0, len(patches), 32):
+                            proj_out_slice = self.proj_model(patches[start: start+32])
+                            proj_out.append(proj_out_slice)
+                        proj_out = torch.cat(proj_out)
+
+                    if (proj_class >= 0).sum() > 0:
+                        proj_loss = F.cross_entropy(proj_out[proj_class >= 0], proj_class[proj_class >= 0])
+                        total_loss = loss + proj_loss
+
+            collection.add("total_loss", total_loss.item())
+            collection.add("proj_loss", proj_loss.item())
+            collection.add("segm_loss", loss.item())
+
+            iou += iou_pytorch(out, mask, reduce=False).detach().cpu().numpy().tolist()
+
+            batch_metrics = dict()
+            with torch.no_grad():
+                metric_slug = "metric_proj_acc"
+                if not_enough_rects or (proj_class >= 0).sum() == 0:
+                    metric_value = 0
+                else:
+                    metric_value = special_accuracy(proj_out.cpu(), proj_class.cpu(), true_pred_map).item()
+                collection.add(metric_slug, metric_value)
+                batch_metrics[metric_slug] = metric_value
+
+                metric_slug = "metric_found_rects"
+                metric_value = (true_pred_map >= 0).float().mean().item()
+                collection.add(metric_slug, metric_value)
+                batch_metrics[metric_slug] = metric_value
+
+                if not_enough_rects is False:
+                    VOC_boxes = maP_create_boxes(rectangles,
+                                      pred_classes=proj_out,
+                                      image_indeces=image_index,
+                                      label_mask=class_mask, relative_index=len(boxes))
+                    for box in VOC_boxes:
+                        boxes.addBoundingBox(box)
+
+            it.set_postfix(loss=loss.item(), **batch_metrics)
+
+            if batch_index == 0 and not_enough_rects is False:
+                self._write_images_with_class(name, img, out_mask, rectangles, proj_out, proj_class, image_index, epoch_number)
+            elif batch_index == 0:
+                self._write_images(name, img, out.sigmoid(), epoch_number)
+
+        VOC_metrics = mAP_wrapper_from_boxes(boxes)
+        print("AP", [row["AP"] for row in VOC_metrics])
+        AP = np.mean([row["AP"] for row in VOC_metrics])
+        IOU = np.mean(iou)
+
+        epoch_reduced_metrics = {metric_name: np.mean(collection[metric_name]) for metric_name in collection.keys()}
+        epoch_loss = epoch_reduced_metrics.pop("total_loss")
+        epoch_reduced_metrics["AP"] = AP
+        epoch_reduced_metrics["IOU"] = IOU
         return epoch_loss, epoch_reduced_metrics
 
     def _write_images_with_class(self, general_tag, imgs, pred_masks, rectangles, pred_classes, true_classes, image_index, epoch):
@@ -350,15 +457,25 @@ class Trainer(object):
         best_value = None
         for i_epoch in range(self.config["train"]["epochs"]):
             self.epoch = i_epoch
-            train_loss, train_metrics = self.train_epoch(self.epoch)
+            self.train_epoch(self.epoch)
+            train_loss, train_metrics = self.calc_metrics(self.epoch,
+                                                          name="train",
+                                                          data=self.train_data,
+                                                          batchsize=self.config["train"]["batch"])
             print("Train loss epoch[{}] = {}".format(i_epoch, train_loss))
-            val_loss, val_metrics = self.val_epoch(self.epoch)
+            val_loss, val_metrics = self.calc_metrics(self.epoch, name="val", data=self.val_data,
+                                                      batchsize=self.config["val"]["batch"])
             print("Val loss epoch[{}] = {}".format(i_epoch, val_loss))
-            self.writer.add_scalars("epoch/total_loss", dict(train=train_loss, val=val_loss), i_epoch)
+            test_loss, test_metrics = self.calc_metrics(self.epoch, name="test", data=self.test_data,
+                                                        batchsize=self.config["test"]["batch"])
+            print("Test loss epoch[{}] = {}".format(i_epoch, test_loss))
+            self.writer.add_scalars("epoch/total_loss", dict(train=train_loss, val=val_loss, test=test_loss), i_epoch)
             for metric_name in train_metrics.keys():
                 self.writer.add_scalars("epoch/{}".format(metric_name),
-                                        dict(train=train_metrics[metric_name],
-                                             val=val_metrics[metric_name]), i_epoch)
+                                        dict(train=train_metrics.get(metric_name, 0),
+                                             val=val_metrics.get(metric_name, 0),
+                                             test=test_metrics.get(metric_name, 0),
+                                             ), i_epoch)
 
             torch.save(self.model.state_dict(), os.path.join(self.exp_path, "current_model.h5"))
             if best_value is None or val_loss < best_value:

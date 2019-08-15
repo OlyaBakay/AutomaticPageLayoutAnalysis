@@ -5,7 +5,8 @@ import torch
 import numpy as np
 from skimage import measure
 
-from .metrics import bb_intersection_over_union_numpy
+from .iou import bb_intersection_over_union_numpy
+
 
 def extract_masks_rects(mask):
     rectangles = []

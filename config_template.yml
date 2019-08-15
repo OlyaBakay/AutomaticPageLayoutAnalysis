@@ -1,17 +1,21 @@
-experiment: default_test
+experiment: default_test_VOC_testdata
 data:
   seed: 42
   train_fraction: 0.8
   list:
-    - data/supervisely/zbirnyk/tom_1/1108-2162-1-PB
-    - data/supervisely/zbirnyk/tom_1/1120-2163-1-PB
-    - data/supervisely/zbirnyk/tom_1/1131-2195-1-PB
+    - _data/supervisely/zbirnyk/tom_1/1108-2162-1-PB
+    - _data/supervisely/zbirnyk/tom_1/1120-2163-1-PB
+    - _data/supervisely/zbirnyk/tom_1/1131-2195-1-PB
 train:
   epochs: 10000
   lr: 0.0001
   batch: 16
 val:
   batch: 5
+test:
+  batch: 5
+  list:
+    - _data/supervisely/zbirnyk/tom_2/tom_2__1123-2170-1-PB
 model:
   name: torch-unet
   params:

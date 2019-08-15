@@ -1,6 +1,12 @@
 import torch
 import numpy as np
 
+from .projections import extract_masks_rects
+from .object_detection_metrics.BoundingBox import BoundingBox
+from .object_detection_metrics.BoundingBoxes import BoundingBoxes
+from .object_detection_metrics.utils import BBFormat, BBType
+from .object_detection_metrics.Evaluator import Evaluator
+from .iou import bb_intersection_over_union_numpy
 
 SMOOTH = 1e-6
 
@@ -28,40 +34,7 @@ def iou_pytorch(outputs: torch.Tensor, labels: torch.Tensor, reduce=True):
     return thresholded
 
 
-def bb_intersection_over_union_numpy(boxA, boxB):
-    """
-    Find out iou of two rectangles
-    :param boxA: cv2.rectangle - tuple(x, y, w, h)
-    :param boxB: cv2.rectangle - tuple(x, y, w, h)
-    :return: iou
-    """
-    # from (x,y,w,h) to (xA,yA,xB,yB)
-    # where A is top left and B is bottom right
-    boxA, boxB = np.array(boxA), np.array(boxB)
-    boxA[2:] += boxA[:2]
-    boxB[2:] += boxB[:2]
 
-    # determine the (x, y)-coordinates of the intersection rectangle
-    xA = max(boxA[0], boxB[0])
-    yA = max(boxA[1], boxB[1])
-    xB = min(boxA[2], boxB[2])
-    yB = min(boxA[3], boxB[3])
-
-    # compute the area of intersection rectangle
-    interArea = max(0, xB - xA + 1) * max(0, yB - yA + 1)
-
-    # compute the area of both the prediction and ground-truth
-    # rectangles
-    boxAArea = (boxA[2] - boxA[0] + 1) * (boxA[3] - boxA[1] + 1)
-    boxBArea = (boxB[2] - boxB[0] + 1) * (boxB[3] - boxB[1] + 1)
-
-    # compute the intersection over union by taking the intersection
-    # area and dividing it by the sum of prediction + ground-truth
-    # areas - the interesection area
-    iou = interArea / float(boxAArea + boxBArea - interArea)
-
-    # return the intersection over union value
-    return iou
 
 
 def accuracy(pred, true):
@@ -81,3 +54,70 @@ def special_accuracy(pred, true, true_pred_map):
     # print(true_pred_map.shape, pred.shape, true.shape, should_count_mask.shape)
     intersection[should_count_mask] = (pred == true)[true_pred_map[should_count_mask]]
     return intersection.float().mean()
+
+
+def maP_create_boxes(pred_rectangles, pred_classes, image_indeces, label_mask, relative_index=0):
+    """
+
+    :param pred_rectangles:
+    :param pred_classes: torch.Tensor(N, C) logits
+    :param image_indeces:
+    :param label_mask:
+    :return:
+    """
+    label_mask = label_mask.detach().cpu().numpy()
+    pred_rectangles = pred_rectangles.detach().cpu().numpy()
+    pred_classes = pred_classes.softmax(1).detach().cpu().numpy()
+
+    boxes = []
+    N = label_mask.shape[0]
+    for image_index in range(N):
+        _, label_rectangles, label_classes = extract_masks_rects(label_mask[image_index])
+        for rect, class_id in zip(label_rectangles, label_classes):
+            x, y, w, h = rect
+            box = BoundingBox(
+                imageName=str(relative_index + image_index),
+                classId=class_id - 1,
+                x=x,y=y,w=w,h=h,
+                bbType=BBType.GroundTruth,
+                classConfidence=1,
+            )
+            boxes.append(box)
+
+    for image_index, rect, class_distribution in zip(image_indeces, pred_rectangles, pred_classes):
+        pred_class = np.argmax(class_distribution)
+        confidence = class_distribution[pred_class]
+        x, y, w, h = rect
+        box = BoundingBox(
+            imageName=str(relative_index + image_index),
+            classId=pred_class,
+            x=x,y=y,w=w,h=h,
+            bbType=BBType.Detected,
+            classConfidence=confidence,
+        )
+        boxes.append(box)
+    return boxes
+
+
+def mAP_wrapper(pred_rectangles, pred_classes, image_indeces, label_mask, relative_index=0):
+    """
+
+    :param pred_rectangles:
+    :param pred_classes: torch.Tensor(N, C) logits
+    :param image_indeces:
+    :param label_mask:
+    :return:
+    """
+    boxes_ = maP_create_boxes(pred_rectangles, pred_classes, image_indeces, label_mask, relative_index)
+    boxes = BoundingBoxes()
+    for box in boxes_:
+        boxes.addBoundingBox(box)
+    res = Evaluator().GetPascalVOCMetrics(boxes, IOUThreshold=0.5)
+    # print(len(res))
+    return res
+
+
+def mAP_wrapper_from_boxes(boxes):
+    res = Evaluator().GetPascalVOCMetrics(boxes, IOUThreshold=0.5)
+    # print(len(res))
+    return res
